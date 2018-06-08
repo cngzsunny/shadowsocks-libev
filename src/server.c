@@ -813,7 +813,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         int offset     = 0;
         int need_query = 0;
         char atyp      = server->buf->data[offset++];
-        char host[257] = { 0 };
+        char host[255] = { 0 };
         uint16_t port  = 0;
         struct addrinfo info;
         struct sockaddr_storage storage;
@@ -971,7 +971,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             memset(query, 0, sizeof(query_t));
             query->server = server;
             server->query = query;
-            snprintf(query->hostname, 256, "%s", host);
+            snprintf(query->hostname, 257, "%s", host);
 
             server->stage = STAGE_RESOLVE;
             resolv_start(host, port, resolv_cb, resolv_free_cb, query);
@@ -1860,7 +1860,7 @@ main(int argc, char **argv)
     }
 
     if (method == NULL) {
-        method = "rc4-md5";
+        method = "chacha20-ietf-poly1305";
     }
 
     if (timeout == NULL) {
