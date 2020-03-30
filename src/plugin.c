@@ -1,7 +1,7 @@
 /*
  * plugin.c - Manage plugins
  *
- * Copyright (C) 2013 - 2018, Max Lv <max.c.lv@gmail.com>
+ * Copyright (C) 2013 - 2019, Max Lv <max.c.lv@gmail.com>
  *
  * This file is part of the shadowsocks-libev.
  *
@@ -23,7 +23,6 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-
 
 #include <string.h>
 #ifndef __MINGW32__
@@ -53,7 +52,7 @@ static struct cork_env *env        = NULL;
 static struct cork_exec *exec      = NULL;
 static struct cork_subprocess *sub = NULL;
 #ifdef __MINGW32__
-static uint16_t sub_control_port   = 0;
+static uint16_t sub_control_port = 0;
 void cork_subprocess_set_control(struct cork_subprocess *self, uint16_t port);
 #endif
 
@@ -110,10 +109,15 @@ start_ss_plugin(const char *plugin,
     if (plugin_opts != NULL)
         cork_env_add(env, "SS_PLUGIN_OPTIONS", plugin_opts);
 
+    exec = cork_exec_new(plugin);
+    cork_exec_add_param(exec, plugin);  // argv[0]
+    extern int fast_open;
+    if (fast_open)
+        cork_exec_add_param(exec, "--fast-open");
 #ifdef __ANDROID__
-    exec = cork_exec_new_with_params("sh", "-c", plugin, NULL);
-#else
-    exec = cork_exec_new_with_params(plugin, NULL);
+    extern int vpn;
+    if (vpn)
+        cork_exec_add_param(exec, "-V");
 #endif
 
     cork_exec_set_env(exec, env);
@@ -122,7 +126,7 @@ start_ss_plugin(const char *plugin,
 #ifdef __MINGW32__
     cork_subprocess_set_control(sub, sub_control_port);
 #endif
-  
+
     return cork_subprocess_start(sub);
 }
 
@@ -268,7 +272,7 @@ start_plugin(const char *plugin,
         if (cwd) {
 #else
         char cwd[PATH_MAX];
-        if (!getcwd(cwd, PATH_MAX)) {
+        if (getcwd(cwd, PATH_MAX) != NULL) {
 #endif
             new_path_len = strlen(current_path) + strlen(cwd) + 2;
             new_path     = ss_malloc(new_path_len);
@@ -306,7 +310,7 @@ get_local_port()
     }
 
     struct sockaddr_in serv_addr;
-    bzero((char *)&serv_addr, sizeof(serv_addr));
+    memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family      = AF_INET;
     serv_addr.sin_addr.s_addr = INADDR_ANY;
     serv_addr.sin_port        = 0;
@@ -330,6 +334,11 @@ stop_plugin()
 {
     if (sub != NULL) {
         cork_subprocess_abort(sub);
+#ifndef __MINGW32__
+        if (cork_subprocess_wait(sub) == -1) {
+            LOGI("error on terminating the plugin.");
+        }
+#endif
         cork_subprocess_free(sub);
     }
 }
@@ -342,4 +351,3 @@ is_plugin_running()
     }
     return 0;
 }
-

@@ -1,7 +1,7 @@
 /*
  * crypto.c - Manage the global crypto
  *
- * Copyright (C) 2013 - 2018, Max Lv <max.c.lv@gmail.com>
+ * Copyright (C) 2013 - 2019, Max Lv <max.c.lv@gmail.com>
  *
  * This file is part of the shadowsocks-libev.
  *
@@ -156,6 +156,7 @@ crypto_init(const char *password, const char *key, const char *method)
                 break;
             }
         if (m != -1) {
+            LOGI("Stream ciphers are insecure, therefore deprecated, and should be almost always avoided.");
             cipher_t *cipher = stream_init(password, key, method);
             if (cipher == NULL)
                 return NULL;
@@ -222,7 +223,7 @@ crypto_derive_key(const char *pass, uint8_t *key, size_t key_len)
 
     if (pass == NULL)
         return key_len;
-    if (mbedtls_md_setup(&c, md, 1))
+    if (mbedtls_md_setup(&c, md, 0))
         return 0;
 
     for (j = 0, addmd = 0; j < key_len; addmd++) {

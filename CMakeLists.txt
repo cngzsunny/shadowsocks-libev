@@ -1,23 +1,25 @@
 cmake_minimum_required(VERSION 3.2)
 
 set(PROJECT_NAME shadowsocks-libev)
-set(RELEASE_DATE 2018-5-28)
-set(PROJECT_VERSION "3.2.0")
+set(RELEASE_DATE 2020-01-10)
+set(PROJECT_VERSION "3.3.4")
 set(PROJECT_DESC "a lightweight secured socks5 proxy")
 set(PROJECT_URL "https://shadowsocks.org")
 set(PROJECT_ISSUES_URL "https://github.com/shadowsocks/shadowsocks-libev")
-project(${PROJECT_NAME})
+project(${PROJECT_NAME} VERSION ${PROJECT_VERSION})
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu99")
 
-#set(CMAKE_BINARY_DIR ${CMAKE_SOURCE_DIR}/out)
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_SOURCE_DIR}/cmake)
-set(RUNTIME_SHARED_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/shared/bin)
+#set(PROJECT_BINARY_DIR ${PROJECT_SOURCE_DIR}/out)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR}/cmake)
+set(RUNTIME_SHARED_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/shared/bin)
 
 set(CMAKE_MACOSX_RPATH TRUE)
+
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug)
@@ -35,21 +37,26 @@ option(WITH_EMBEDDED_SRC "build with embedded libcork, libipset, and libbloom so
 # Will set GIT_EXECUTABLE and GIT_FOUND
 # find_package(Git)
 
+# When choose to not use embedded libcork, libipset and libbloom, use libs shipped by system
+if (NOT WITH_EMBEDDED_SRC)
+    set(USE_SYSTEM_SHARED_LIB TRUE)
+endif ()
+
 # Run platform tests
-include(${CMAKE_SOURCE_DIR}/cmake/configure.cmake)
-configure_file(${CMAKE_SOURCE_DIR}/cmake/config.h.cmake ${CMAKE_BINARY_DIR}/src/config.h)
-add_definitions(-I$(CMAKE_BINARY_DIR)/src)
+include(${PROJECT_SOURCE_DIR}/cmake/configure.cmake)
+configure_file(${PROJECT_SOURCE_DIR}/cmake/config.h.cmake ${PROJECT_BINARY_DIR}/src/config.h)
+add_definitions(-I${PROJECT_BINARY_DIR}/src)
 add_definitions(-DHAVE_CONFIG_H)
 
 # pkg-config
 configure_file(
-        ${CMAKE_SOURCE_DIR}/cmake/shadowsocks-libev.pc.cmake
-        ${CMAKE_BINARY_DIR}/pkgconfig/shadowsocks-libev.pc
+        ${PROJECT_SOURCE_DIR}/cmake/shadowsocks-libev.pc.cmake
+        ${PROJECT_BINARY_DIR}/pkgconfig/shadowsocks-libev.pc
         @ONLY
 )
 install(FILES
-        ${CMAKE_BINARY_DIR}/pkgconfig/shadowsocks-libev.pc
-        DESTINATION pkgconfig
+        ${PROJECT_BINARY_DIR}/pkgconfig/shadowsocks-libev.pc
+        DESTINATION lib/pkgconfig
         )
 
 if (WITH_EMBEDDED_SRC)
