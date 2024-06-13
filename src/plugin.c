@@ -111,9 +111,7 @@ start_ss_plugin(const char *plugin,
 
     exec = cork_exec_new(plugin);
     cork_exec_add_param(exec, plugin);  // argv[0]
-    extern int fast_open;
-    if (fast_open)
-        cork_exec_add_param(exec, "--fast-open");
+
 #ifdef __ANDROID__
     extern int vpn;
     if (vpn)
@@ -315,11 +313,13 @@ get_local_port()
     serv_addr.sin_addr.s_addr = INADDR_ANY;
     serv_addr.sin_port        = 0;
     if (bind(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        close(sock);
         return 0;
     }
 
     socklen_t len = sizeof(serv_addr);
     if (getsockname(sock, (struct sockaddr *)&serv_addr, &len) == -1) {
+        close(sock);
         return 0;
     }
     if (close(sock) < 0) {

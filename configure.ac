@@ -2,7 +2,7 @@ dnl                                               -*- Autoconf -*-
 dnl Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.67])
-AC_INIT([shadowsocks-libev], [3.3.4], [max.c.lv@gmail.com])
+AC_INIT([shadowsocks-libev], [3.3.5], [max.c.lv@gmail.com])
 AC_CONFIG_SRCDIR([src/crypto.c])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_AUX_DIR(auto)
@@ -66,7 +66,7 @@ dnl Add library for mingw
 case $host in
   *-mingw*)
     CFLAGS="$CFLAGS -mno-ms-bitfields"
-    LIBS="$LIBS -lws2_32"
+    LIBS="$LIBS -lws2_32 -liphlpapi"
     ;;
   *-cygwin*)
     CFLAGS="$CFLAGS -mno-ms-bitfields"
@@ -252,7 +252,8 @@ AC_ARG_ENABLE(connmarktos,
 if test x"$enable_connmarktos" = "xyes" ; then
 	AC_MSG_NOTICE([Linux Netfilter Conntrack support requested by --enable-connmarktos: ${enable_connmarktos}])
 	if test "x$enable_connmarktos" != "xno"; then
-	    AC_SEARCH_LIBS([nfct_query], [netfilter_conntrack],,[
+	    PKG_CHECK_MODULES([NETFILTER_CONNTRACK], [libnetfilter_conntrack],,
+	    [AC_SEARCH_LIBS([nfct_query], [netfilter_conntrack],,[
 	        if test x"$enable_connmarktos" = "xyes"; then
 	            AC_MSG_ERROR([--enable-connmarktos specified but libnetfilter-conntrack library not found])
 	        fi
@@ -262,12 +263,48 @@ if test x"$enable_connmarktos" = "xyes" ; then
 	        if test x"$enable_connmarktos" = "xyes"; then
 	            AC_MSG_ERROR([--enable-connmarktos specified but libnetfilter-conntrack headers not found])
 	        fi
-	        with_netfilter_conntrack=no])
+	        with_netfilter_conntrack=no])])
 	  # If nothing is broken; enable the libraries usage.
 	  if test "x$with_netfilter_conntrack" != "xno"; then
 		with_netfilter_conntrack=yes
 		AC_DEFINE(USE_NFCONNTRACK_TOS, 1, [Enable support for QOS netfilter mark preservation])
 	  fi
+	fi
+fi
+
+AC_ARG_ENABLE(nftables,
+[AS_HELP_STRING(--enable-nftables, report malicious IP to nftables)],
+[ enable_nftables="$enableval" ])
+
+if test x"$enable_nftables" = "xyes" ; then
+	AC_MSG_NOTICE([Linux nftables support requested by --enable-nftables: ${enable_nftables}])
+	if test "x$enable_nftables" != "xno"; then
+	    PKG_CHECK_MODULES([NFTABLES], [libmnl libnftnl],,
+	    [AC_SEARCH_LIBS([mnl_socket_open], [mnl],,[
+	        if test x"$enable_nftables" = "xyes"; then
+	            AC_MSG_ERROR([--enable-nftables specified but libmnl library not found])
+	        fi
+	        with_nftables=no], [-lmnl])
+	    AC_CHECK_HEADERS([libmnl/libmnl.h],,[
+	        if test x"$enable_nftables" = "xyes"; then
+	            AC_MSG_ERROR([--enable-nftables specified but libmnl headers not found])
+	        fi
+	        with_nftables=no])
+	    AC_SEARCH_LIBS([nftnl_nlmsg_build_hdr], [nftnl],,[
+	        if test x"$enable_nftables" = "xyes"; then
+	            AC_MSG_ERROR([--enable-nftables specified but libnftnl library not found])
+	        fi
+	        with_nftables=no], [-lnftnl])
+	    AC_CHECK_HEADERS([libnftnl/common.h],,[
+	        if test x"$enable_nftables" = "xyes"; then
+	            AC_MSG_ERROR([--enable-nftables specified but libnftnl headers not found])
+	        fi
+	        with_nftables=no])])
+	    # If nothing is broken; enable the libraries usage.
+	    if test "x$with_nftables" != "xno"; then
+		with_nftables=yes
+		AC_DEFINE(USE_NFTABLES, 1, [Enable support for nftables firewall])
+	    fi
 	fi
 fi
 

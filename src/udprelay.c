@@ -324,7 +324,7 @@ parse_udprelay_header(const char *buf, const size_t buf_len,
 }
 
 static char *
-get_addr_str(const struct sockaddr *sa)
+get_addr_str(const struct sockaddr *sa, bool has_port)
 {
     static char s[SS_ADDRSTRLEN];
     memset(s, 0, SS_ADDRSTRLEN);
@@ -356,8 +356,11 @@ get_addr_str(const struct sockaddr *sa)
     int addr_len = strlen(addr);
     int port_len = strlen(port);
     memcpy(s, addr, addr_len);
-    memcpy(s + addr_len + 1, port, port_len);
-    s[addr_len] = ':';
+
+    if (has_port) {
+        memcpy(s + addr_len + 1, port, port_len);
+        s[addr_len] = ':';
+    }
 
     return s;
 }
@@ -428,6 +431,13 @@ create_remote_socket(int ipv6)
     }
 #endif
     }
+
+#if defined(__linux__)
+    // Disable fragmentation
+    int val = IP_PMTUDISC_DO;
+    setsockopt(remote_sock, IPPROTO_IP, IP_MTU_DISCOVER, &val, sizeof(val));
+#endif
+
     return remote_sock;
 }
 
@@ -436,7 +446,7 @@ create_server_socket(const char *host, const char *port)
 {
     struct addrinfo hints;
     struct addrinfo *result, *rp, *ipv4v6bindall;
-    int s, server_sock;
+    int s, server_sock = -1;
 
     memset(&hints, 0, sizeof(struct addrinfo));
     hints.ai_family   = AF_UNSPEC;               /* Return IPv4 and IPv6 choices */
@@ -505,10 +515,12 @@ create_server_socket(const char *host, const char *port)
         if (rc < 0 && errno != ENOPROTOOPT) {
             LOGE("setting ipv4 dscp failed: %d", errno);
         }
+#ifdef IPV6_TCLASS
         rc = setsockopt(server_sock, IPPROTO_IPV6, IPV6_TCLASS, &tos, sizeof(tos));
         if (rc < 0 && errno != ENOPROTOOPT) {
             LOGE("setting ipv6 dscp failed: %d", errno);
         }
+#endif
 #endif
 
 #ifdef MODULE_REDIR
@@ -539,6 +551,12 @@ create_server_socket(const char *host, const char *port)
     }
 
     freeaddrinfo(result);
+
+#if defined(__linux__)
+    // Disable fragmentation
+    int val = IP_PMTUDISC_DO;
+    setsockopt(server_sock, IPPROTO_IP, IP_MTU_DISCOVER, &val, sizeof(val));
+#endif
 
     return server_sock;
 }
@@ -672,10 +690,12 @@ resolv_cb(struct sockaddr *addr, void *data)
                 if (rc < 0 && errno != ENOPROTOOPT) {
                     LOGE("setting ipv4 dscp failed: %d", errno);
                 }
+#ifdef IPV6_TCLASS
                 rc = setsockopt(remotefd, IPPROTO_IPV6, IPV6_TCLASS, &tos, sizeof(tos));
                 if (rc < 0 && errno != ENOPROTOOPT) {
                     LOGE("setting ipv6 dscp failed: %d", errno);
                 }
+#endif
 #endif
 #ifdef SET_INTERFACE
                 if (query_ctx->server_ctx->iface) {
@@ -723,6 +743,29 @@ resolv_cb(struct sockaddr *addr, void *data)
 
 #endif
 
+void convert_ipv4_mapped_ipv6(struct sockaddr_storage* addr) {
+    if (addr->ss_family == AF_INET) {
+        struct sockaddr_in* ipv4_addr = (struct sockaddr_in*)addr;
+
+        struct sockaddr_storage mapped_addr;
+        memset(&mapped_addr, 0, sizeof(mapped_addr));
+
+        struct sockaddr_in6* mapped_ipv6_addr = (struct sockaddr_in6*)&mapped_addr;
+        mapped_ipv6_addr->sin6_family = AF_INET6;
+        mapped_ipv6_addr->sin6_port = ipv4_addr->sin_port;
+        uint8_t* ipv6_raw_addr = mapped_ipv6_addr->sin6_addr.s6_addr;
+        ipv6_raw_addr[10] = 0xff;
+        ipv6_raw_addr[11] = 0xff;
+        in_addr_t ipv4_raw_addr = ntohl(ipv4_addr->sin_addr.s_addr);
+        ipv6_raw_addr[12] = (ipv4_raw_addr >> 24) & 0xff;
+        ipv6_raw_addr[13] = (ipv4_raw_addr >> 16) & 0xff;
+        ipv6_raw_addr[14] = (ipv4_raw_addr >> 8) & 0xff;
+        ipv6_raw_addr[15] = ipv4_raw_addr & 0xff;
+
+        memcpy(addr, &mapped_addr, sizeof(mapped_addr));
+    }
+}
+
 static void
 remote_recv_cb(EV_P_ ev_io *w, int revents)
 {
@@ -767,6 +810,8 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
 #ifdef MODULE_LOCAL
     int err = server_ctx->crypto->decrypt_all(buf, server_ctx->crypto->cipher, buf_size);
     if (err) {
+        LOGE("failed to handshake with %s: %s",
+                get_addr_str((struct sockaddr *)&src_addr, false), "suspicious UDP packet");
         // drop the packet silently
         goto CLEAN_UP;
     }
@@ -836,21 +881,19 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         }
     }
 
-    size_t remote_src_addr_len = get_sockaddr_len((struct sockaddr *)&remote_ctx->src_addr);
 
 #ifdef MODULE_REDIR
+    convert_ipv4_mapped_ipv6(&dst_addr);
 
     size_t remote_dst_addr_len = get_sockaddr_len((struct sockaddr *)&dst_addr);
 
-    int src_fd = socket(remote_ctx->src_addr.ss_family, SOCK_DGRAM, 0);
+    int src_fd = socket(AF_INET6, SOCK_DGRAM, 0);
     if (src_fd < 0) {
         ERROR("[udp] remote_recv_socket");
         goto CLEAN_UP;
     }
-    int opt  = 1;
-    int sol  = remote_ctx->src_addr.ss_family == AF_INET6 ? SOL_IPV6 : SOL_IP;
-    int flag = remote_ctx->src_addr.ss_family == AF_INET6 ? IPV6_TRANSPARENT : IP_TRANSPARENT;
-    if (setsockopt(src_fd, sol, flag, &opt, sizeof(opt))) {
+    int opt = 1;
+    if (setsockopt(src_fd, SOL_IPV6, IPV6_TRANSPARENT, &opt, sizeof(opt))) {
         ERROR("[udp] remote_recv_setsockopt");
         close(src_fd);
         goto CLEAN_UP;
@@ -860,17 +903,24 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         close(src_fd);
         goto CLEAN_UP;
     }
+    if (reuse_port) {
+        if (set_reuseport(src_fd) != 0) {
+            ERROR("[udp] remote_recv port_reuse");
+        }
+    }
 #ifdef IP_TOS
     // Set QoS flag
-    int tos   = 46 << 2;
+    int tos = 46 << 2;
     int rc = setsockopt(src_fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
     if (rc < 0 && errno != ENOPROTOOPT) {
         LOGE("setting ipv4 dscp failed: %d", errno);
     }
+#ifdef IPV6_TCLASS
     rc = setsockopt(src_fd, IPPROTO_IPV6, IPV6_TCLASS, &tos, sizeof(tos));
     if (rc < 0 && errno != ENOPROTOOPT) {
         LOGE("setting ipv6 dscp failed: %d", errno);
     }
+#endif
 #endif
     if (bind(src_fd, (struct sockaddr *)&dst_addr, remote_dst_addr_len) != 0) {
         ERROR("[udp] remote_recv_bind");
@@ -878,8 +928,14 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         goto CLEAN_UP;
     }
 
+    struct sockaddr_storage mapped_src_addr;
+    memcpy(&mapped_src_addr, &remote_ctx->src_addr, sizeof(remote_ctx->src_addr));
+    convert_ipv4_mapped_ipv6(&mapped_src_addr);
+
+    size_t remote_src_addr_len = get_sockaddr_len((struct sockaddr *)&mapped_src_addr);
+
     int s = sendto(src_fd, buf->data, buf->len, 0,
-                   (struct sockaddr *)&remote_ctx->src_addr, remote_src_addr_len);
+                   (struct sockaddr *)&mapped_src_addr, remote_src_addr_len);
     if (s == -1 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
         ERROR("[udp] remote_recv_sendto");
         close(src_fd);
@@ -888,6 +944,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
     close(src_fd);
 
 #else
+    size_t remote_src_addr_len = get_sockaddr_len((struct sockaddr *)&remote_ctx->src_addr);
 
     int s = sendto(server_ctx->fd, buf->data, buf->len, 0,
                    (struct sockaddr *)&remote_ctx->src_addr, remote_src_addr_len);
@@ -984,6 +1041,8 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
 
     int err = server_ctx->crypto->decrypt_all(buf, server_ctx->crypto->cipher, buf_size);
     if (err) {
+        LOGE("failed to handshake with %s: %s",
+                get_addr_str((struct sockaddr *)&src_addr, false), "suspicious UDP packet");
         // drop the packet silently
         goto CLEAN_UP;
     }
@@ -1152,12 +1211,12 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
 #ifdef MODULE_REDIR
             char src[SS_ADDRSTRLEN];
             char dst[SS_ADDRSTRLEN];
-            strcpy(src, get_addr_str((struct sockaddr *)&src_addr));
-            strcpy(dst, get_addr_str((struct sockaddr *)&dst_addr));
+            strcpy(src, get_addr_str((struct sockaddr *)&src_addr, true));
+            strcpy(dst, get_addr_str((struct sockaddr *)&dst_addr, true));
             LOGI("[%s] [udp] cache miss: %s <-> %s", s_port, dst, src);
 #else
             LOGI("[%s] [udp] cache miss: %s:%s <-> %s", s_port, host, port,
-                 get_addr_str((struct sockaddr *)&src_addr));
+                 get_addr_str((struct sockaddr *)&src_addr, true));
 #endif
         }
     } else {
@@ -1165,12 +1224,12 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
 #ifdef MODULE_REDIR
             char src[SS_ADDRSTRLEN];
             char dst[SS_ADDRSTRLEN];
-            strcpy(src, get_addr_str((struct sockaddr *)&src_addr));
-            strcpy(dst, get_addr_str((struct sockaddr *)&dst_addr));
+            strcpy(src, get_addr_str((struct sockaddr *)&src_addr, true));
+            strcpy(dst, get_addr_str((struct sockaddr *)&dst_addr, true));
             LOGI("[%s] [udp] cache hit: %s <-> %s", s_port, dst, src);
 #else
             LOGI("[%s] [udp] cache hit: %s:%s <-> %s", s_port, host, port,
-                 get_addr_str((struct sockaddr *)&src_addr));
+                 get_addr_str((struct sockaddr *)&src_addr, true));
 #endif
         }
     }
@@ -1206,10 +1265,12 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         if (rc < 0 && errno != ENOPROTOOPT) {
             LOGE("setting ipv4 dscp failed: %d", errno);
         }
+#ifdef IPV6_TCLASS
         rc = setsockopt(remotefd, IPPROTO_IPV6, IPV6_TCLASS, &tos, sizeof(tos));
         if (rc < 0 && errno != ENOPROTOOPT) {
             LOGE("setting ipv6 dscp failed: %d", errno);
         }
+#endif
 #endif
 #ifdef SET_INTERFACE
         if (server_ctx->iface) {
@@ -1302,10 +1363,12 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 if (rc < 0 && errno != ENOPROTOOPT) {
                     LOGE("setting ipv4 dscp failed: %d", errno);
                 }
+#ifdef IPV6_TCLASS
                 rc = setsockopt(remotefd, IPPROTO_IPV6, IPV6_TCLASS, &tos, sizeof(tos));
                 if (rc < 0 && errno != ENOPROTOOPT) {
                     LOGE("setting ipv6 dscp failed: %d", errno);
                 }
+#endif
 #endif
 #ifdef SET_INTERFACE
                 if (server_ctx->iface) {
@@ -1445,6 +1508,9 @@ free_udprelay()
         ev_io_stop(loop, &server_ctx->io);
         close(server_ctx->fd);
         cache_delete(server_ctx->conn_cache, 0);
+#ifdef MODULE_LOCAL
+        free((char*) server_ctx->remote_addr);
+#endif
         ss_free(server_ctx);
         server_ctx_list[server_num] = NULL;
     }
